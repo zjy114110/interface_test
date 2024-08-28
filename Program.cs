@@ -2,6 +2,8 @@
 using ConsoleApp2;
 using Newtonsoft.Json;
 using System;
+using System.Data;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
@@ -157,6 +159,152 @@ void accesstoken()
 // 使用accesstoken
 
 
+ string GetMterial(string strart, string end, int num, string factory)
+{
+    try
+    {
+        var appkey = "11111";
+        var start = strart.Substring(0, 4) + "-" + strart.Substring(4, 2) + "-" + strart.Substring(6, 2) + " 00:00:00";
+        var endtime = strart.Substring(0, 4) + "-" + strart.Substring(4, 2) + "-" + strart.Substring(6, 2) + " " + end;
+        if (num == 0)
+        {
+            endtime = DateTime.Now.ToString();
+        }
+        int j = 0;
+
+        string url = "http://apigateway-test.segway-ninebot.com:8081/restcloud/masterdata/getMaterialByQuery";
+        var returndata = new returnmsg();
+        var datalist = new List<Data2>();
+        do
+        {
+            var res = new res()
+            {
+                factory = factory,
+                page = j + 1,
+                startDate = start,
+                endDate = endtime
+
+            };
+
+            var jsonString = JsonConvert.SerializeObject(res);
+
+            WebRequest request = WebRequest.Create(url);
+            request.Method = "POST";
+            request.Headers.Add("appkey", appkey);
+            request.ContentType = "application/json";
+            byte[] bs = Encoding.UTF8.GetBytes(jsonString);
+            request.ContentLength = bs.Length;
+            Stream newStream = request.GetRequestStream();
+            newStream.Write(bs, 0, bs.Length);
+            newStream.Close();
+
+            WebResponse response = request.GetResponse();
+            Stream stream = response.GetResponseStream();
+            StreamReader reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+            string responseText = reader.ReadToEnd();
+            var root = JsonConvert.DeserializeObject<returnmsg>(responseText);
+            returndata = root;
+            datalist.AddRange(root.data);
+            j = j + 1;
+        }
+        while (returndata.msg != "The data has been queried to the last page");
+        if (datalist.Count == 0)
+        {
+            return "没有数据";
+        }
+        var str = @"TRUNCATE TABLE SAP_ITEM";
+        string time = endtime;
+        string strErrMsg = "";
+        if (1==1)
+        {
+            str = @"select * from SAP_ITEM where 1=2 ";
+            //var dsItem = DataModule.GetDataSet(str);
+            dsItem.Tables[0].TableName = "SAP_ITEM";
+            foreach (var root in datalist)
+            {
+                DataRow row = dsItem.Tables["SAP_ITEM"].NewRow();
+                string snrule = "";
+                if (root.factoryView != null)
+                {
+                    for (int i = 0; i < root.factoryView.Count; i++)
+                    {
+                        if (root.factoryView[i].snParamsFile != "")
+                        {
+                            snrule = root.factoryView[i].snParamsFile;
+                        }
+                    }
+                }
+                row["WERKS"] = factory;
+                row["MATNR"] = root.materialCode;
+                row["MAKTX"] = root.materialDescribe;
+                row["MAKTX2"] = root.materialDescribeEn;
+                row["MTART"] = root.materialType;
+                row["MATKL"] = root.materialGroup;
+                row["SERNP"] = snrule;
+                row["ZCPXL"] = root.productSeries;
+                row["ZCPXL_TXT"] = root.seriesNameCn;
+                row["ZCPXH"] = root.productType;
+                row["ZCPXH_TXT"] = root.productModel;
+                row["MAGRV"] = root.packagingGroup;
+                row["BEZEI"] = root.snDescribe;
+                dsItem.Tables["SAP_ITEM"].Rows.Add(row);
+
+            }
+
+            //if (DataModule.UpdateDataSet(dsItem))
+            //{
+                #region 更新主数据
+                string GUID = Guid.NewGuid().ToString();
+                str = string.Format(@"INSERT INTO MBDM_ITEM
+                        (ITEM_KEY,ITEM_SERIAL_KEY,ITEM_ID,ITEM_NAME,ITEM_DESC,ITEM_VER,ITEM_SPEC,
+                        ITEM_TYPE,ITEM_GROUP_KEY,ITEM_TYPE_DESC,ITEM_GROUP_DESC,
+                        ACTIVE,TRX_DATE,TRX_USER_KEY,TRX_USER_SERIAL_KEY,SN_CONTROL)
+                        SELECT  MATNR,0,MATNR,MAKTX,(CASE MAKTX2 WHEN '*' THEN MAKTX ELSE MAKTX2 END),
+                        CASE MAGRV WHEN '*' THEN '' ELSE  MAGRV END ,
+                        CASE BEZEI WHEN '*' THEN '' ELSE  BEZEI END ,
+                        CASE ZCPXH WHEN '*' THEN '' ELSE  ZCPXH END ,
+                        CASE ZCPXL WHEN '*' THEN '' ELSE  ZCPXL END ,
+                        CASE ZCPXH_TXT WHEN '*' THEN '' ELSE ZCPXH_TXT END,
+                        CASE ZCPXL_TXT WHEN '*' THEN '' ELSE ZCPXL_TXT END,
+                        'Y','{0}','{1}',0,(CASE SERNP WHEN '*' THEN 'N' ELSE 'Y' END)
+                    FROM SAP_ITEM A
+                    WHERE NOT EXISTS(SELECT * FROM MBDM_ITEM B WHERE  A.MATNR=B.ITEM_ID)", time.ToString(), "11");
+                //DataModule.AddUpdateSQLAnsy(GUID, str);
+                str = string.Format(@"UPDATE A SET A.ITEM_NAME=B.MAKTX,A.ITEM_DESC=(CASE B.MAKTX2 WHEN '*' THEN B.MAKTX ELSE B.MAKTX2 END),
+                    A.ITEM_VER=(CASE B.MAGRV WHEN '*' THEN '' ELSE B.MAGRV END) ,
+                    A.ITEM_SPEC=(CASE B.BEZEI WHEN '*' THEN '' ELSE B.BEZEI END) ,
+                    A.ITEM_GROUP_KEY=(CASE B.ZCPXL WHEN '*' THEN '' ELSE B.ZCPXL END) ,
+                    A.ITEM_TYPE=(CASE B.ZCPXH WHEN '*' THEN '' ELSE B.ZCPXH END) ,
+                    A.ITEM_TYPE_DESC=(CASE B.ZCPXH_TXT WHEN '*' THEN '' ELSE B.ZCPXH_TXT END) ,
+                    A.ITEM_GROUP_DESC=(CASE B.ZCPXL_TXT WHEN '*' THEN '' ELSE B.ZCPXL_TXT END) ,
+                    A.TRX_DATE='{0}',A.TRX_USER_KEY='{1}',A.TRX_USER_SERIAL_KEY=A.TRX_USER_SERIAL_KEY+1
+                    FROM MBDM_ITEM A,SAP_ITEM B
+                    WHERE  B.MATNR=A.ITEM_ID", time.ToString(), "11");//, server.strWorks
+                                                                                  //A.SN_CONTROL=(CASE B.SERNP WHEN '*' THEN 'N' ELSE 'Y' END),
+                //DataModule.AddUpdateSQLAnsy(GUID, str);
+                //if (DataModule.UpDateSqlTranAnsy(GUID))
+                //{
+                //    strErrMsg = "接收成功";
+                //    return strErrMsg;
+                //}
+                //else
+                //{
+                //    strErrMsg = "FAIL，数据库更新失败！";
+                //    return strErrMsg;
+                //}
+                #endregion
+            }
+
+        //}
+        return "数据库临表未更新";
+    }
+    catch (Exception ex)
+    {
+        var ss = ex.Message;
+        return ss;
+    }
+
+}
 void code()
 {
     var url = "https://open.kwaixiaodian.com/oauth/authorize?app_id=ks664843898699381195&redirect_uri=https://www.ninebot.com&scope=merchant_order&response_type=code";
@@ -1148,4 +1296,320 @@ public class Root1
     public List<Data1> data { get; set; }
 }
 
+public class factoryView
+{
+    /// <summary>
+    /// 
+    /// </summary>
+    public string factory { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string factoryBatchId { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string snParamsFile { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string maintainStatus { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string materialStatus { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string purchaseType { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string qualityTesting { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string stockLocation { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string purchaseGroup { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string lvorm { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string fromList { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string quota { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string deliveryTime { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string deliveryStrict { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string deliveryShort { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string deliveryLocation { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string minQuantity { get; set; }
+}
 
+public class Data2
+{
+    /// <summary>
+    /// 
+    /// </summary>
+    public string materialCode { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string materialType { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string materialGroup { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string newMaterialCode { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string measure { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string warranty { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string vehicleColor { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string specNo { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string specVersion { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string centralPurchasing { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string productGroup { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string packagingGroup { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string externalMaterialGroup { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string productSeries { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string productType { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string drawingVersion { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string goodsCode { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string project { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string materialVersion { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string drawingNo { get; set; }
+    public string materialApplicant { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string materialDescribe { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string materialDescribeEn { get; set; }
+    public string elaborate { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string materialDescribeLe { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string purchaseTypeVote { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string productCategory { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string twoLevelCategory { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string stage { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string threeLevelCategory { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string oneLevelCategory { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public DateTime materialErsda { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public DateTime materialLaeda { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string mstae { get; set; }
+    public string mbrsh { get; set; }
+    public string ewbez { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string lvorm { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string zeifo { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string ztx { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string tboxCode { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string tboxDescribe { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string snDescribe { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string mtposMara { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string orderUnit { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string umren { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string umrez { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string certifiedModel { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string netWeight { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string weight { get; set; }
+    public string seriesNameCn { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string seriesNameEn { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string typeNameCn { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string typeNameEn { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string productModel { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string subseries { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string subseriesCode { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public List<factoryView> factoryView { get; set; }
+}
+
+public class returnmsg
+{
+    /// <summary>
+    /// 
+    /// </summary>
+    public string msg { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public string errcode { get; set; }
+    /// <summary>
+    /// 
+    /// </summary>
+    public List<Data2> data { get; set; }
+}
+public class res
+{
+
+    public string materialCode { get; set; }
+    public string newMaterialCode { get; set; }
+    public string materialGroup { get; set; }
+    public string externalMaterialGroup { get; set; }
+    public string factory { get; set; }
+    public string materialStatus { get; set; }
+    public int page { get; set; }
+    public string startDate { get; set; }
+    public string endDate { get; set; }
+}
